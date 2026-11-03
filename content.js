@@ -2,7 +2,7 @@ const api = globalThis.browser ?? globalThis.chrome;
 
 const DEFAULTS = {
   enabled: true,
-  target: '3.8 Flash High',
+  target: '', // label of the pinned model, for display only
   modeId: '',
   levelIndex: -1,
   debug: false,
@@ -28,9 +28,8 @@ const PICKER_SELECTORS = [
 const ITEM_SELECTOR =
   '[role="menuitem"],[role="menuitemradio"],[role="menuitemcheckbox"],[role="option"],[role="radio"],[role="button"],mat-option,button,gem-menu-item';
 const MODEL_HINT = /(flash|thinking|fast|nano|high|low|reasoning|extended|pro\b)/i;
-const DIAG_HINT =
-  /(flash|pro|thinking|fast|auto|nano|high|low|medium|standard|extended|deep|ultra|lite|plus|reasoning)/i;
 const MAX_ATTEMPTS = 15;
+const MAX_FAILURES = 3; // misses that retrying cannot fix (no item, unconfirmed, no level)
 const RETRY_MS = 1500;
 const USER_QUIET_MS = 3000;
 const OVERLAY_SELECTOR =
@@ -42,12 +41,12 @@ const state = {
   busy: false,
   satisfied: false,
   attempts: 0,
+  failures: 0,
   retryTimer: 0,
   menuRoot: null,
   userTouchedAt: 0,
   pickerText: '',
   lastError: '',
-  candidates: [],
 };
 
 function log(...args) {
@@ -71,35 +70,6 @@ function textOf(el) {
 
 function pickerSignature(el) {
   return `${textOf(el)} ${el?.getAttribute('aria-label') ?? ''}`.trim();
-}
-
-function matchesTarget(text, target = state.settings.target) {
-  const wanted = normalize(target);
-  const got = normalize(text);
-  if (!wanted || !got) return false;
-  if (got === wanted || got.includes(wanted)) return true;
-  return wanted.split(' ').filter(Boolean).every((token) => got.includes(token));
-}
-
-// The picker shows "Flash Cao": no version number, and the thinking level in the UI language.
-// So it is on target when its model words equal the target's, ignoring version numbers and levels.
-// The narrow layout's header button reads "Gemini Flash", so "gemini" is not part of the model.
-const LEVEL_WORDS = new Set(['cao', 'thap', 'trung', 'binh', 'high', 'medium', 'low', 'standard', 'gemini']);
-
-function modelWords(text) {
-  return normalize(text)
-    .split(' ')
-    .filter((word) => word && !/^\d/.test(word) && !LEVEL_WORDS.has(word));
-}
-
-function pickerOnTarget(picker, target = state.settings.target) {
-  const want = modelWords(target);
-  const got = modelWords(textOf(picker));
-  return want.length > 0 && want.length === got.length && want.every((word) => got.includes(word));
-}
-
-function onTarget(picker) {
-  return matchesTarget(pickerSignature(picker)) || pickerOnTarget(picker);
 }
 
 function isVisible(el) {
@@ -136,66 +106,6 @@ function findModelPicker() {
 function overlayRoot() {
   const panes = [...document.querySelectorAll(OVERLAY_SELECTOR)].filter(isVisible);
   return panes.find((el) => el.querySelector(ITEM_SELECTOR)) ?? null;
-}
-
-function menuItems() {
-  const root = state.menuRoot && isVisible(state.menuRoot) ? state.menuRoot : overlayRoot();
-  if (!root) return [];
-  return [...root.querySelectorAll(ITEM_SELECTOR)].filter((el) => {
-    if (!isVisible(el)) return false;
-    const text = textOf(el).trim();
-    return text.length > 0 && text.length <= 120;
-  });
-}
-
-function clickableAncestor(el) {
-  return (
-    el.closest(
-      'button,[role="button"],[role="menuitem"],[role="menuitemradio"],[role="option"],[role="radio"],mat-option,li,label',
-    ) ?? el
-  );
-}
-
-function matchingElement(elements, target = state.settings.target) {
-  const wanted = normalize(target);
-  const matches = [];
-  const labels = new Set();
-  for (const el of elements) {
-    if (!el.isConnected || !isVisible(el)) continue;
-    const text = textOf(el).trim();
-    if (!text || text.length > 120) continue;
-    const key = normalize(text);
-    if (!key) continue;
-    if (key.length <= 60 && labels.size < 40) labels.add(key);
-    if (!matchesTarget(text, target)) continue;
-    matches.push({ el, key, children: el.getElementsByTagName('*').length });
-  }
-  if (labels.size > 0) {
-    const hinted = [...labels].filter((label) => DIAG_HINT.test(label));
-    state.candidates = (hinted.length > 0 ? hinted : [...labels]).slice(0, 12);
-  }
-  if (matches.length === 0) return null;
-  matches.sort(
-    (a, b) =>
-      Number(b.key === wanted) - Number(a.key === wanted) ||
-      a.children - b.children ||
-      a.key.length - b.key.length,
-  );
-  return clickableAncestor(matches[0].el);
-}
-
-function findItem() {
-  return matchingElement(menuItems());
-}
-
-function findInAdded(roots) {
-  const elements = [];
-  for (const root of roots) {
-    if (!root.isConnected) continue;
-    elements.push(root);
-    for (const child of root.querySelectorAll('*')) elements.push(child);
-  }
-  return matchingElement(elements);
 }
 
 function humanClick(el) {
@@ -253,19 +163,6 @@ function waitFor(fn, timeout = 3000, interval = 100) {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function startNodeWatcher() {
-  const added = [];
-  const observer = new MutationObserver((records) => {
-    for (const record of records) {
-      for (const node of record.addedNodes) {
-        if (node.nodeType === 1) added.push(node);
-      }
-    }
-  });
-  observer.observe(document.documentElement, { childList: true, subtree: true });
-  return { added, stop: () => observer.disconnect() };
 }
 
 // Gemini's model menu: one gem-menu-item per model, carrying a language-independent data-mode-id,
@@ -354,39 +251,27 @@ async function applyLevel(picker, menuOpen) {
   return done ? { ok: true } : { ok: false, error: 'Đã bấm mức tư duy nhưng chưa xác nhận được' };
 }
 
-async function openMenuAndFind(picker, find = findItem) {
+async function openMenuAndFind(picker, find) {
   if (picker.getAttribute('aria-expanded') === 'true') {
     state.menuRoot = overlayRoot();
     return waitFor(find, 1500, 100);
   }
 
   const before = new Set(document.querySelectorAll(OVERLAY_SELECTOR));
-  const watcher = startNodeWatcher();
-  let scanned = 0;
   humanClick(picker);
   const deadline = Date.now() + 2500;
-  try {
-    while (Date.now() < deadline) {
-      const pane = [...document.querySelectorAll(OVERLAY_SELECTOR)]
-        .filter((el) => isVisible(el) && !before.has(el))
-        .find((el) => el.querySelector(ITEM_SELECTOR));
-      if (pane) state.menuRoot = pane;
+  while (Date.now() < deadline) {
+    const pane = [...document.querySelectorAll(OVERLAY_SELECTOR)]
+      .filter((el) => isVisible(el) && !before.has(el))
+      .find((el) => el.querySelector(ITEM_SELECTOR));
+    if (pane) state.menuRoot = pane;
 
-      const item = state.menuRoot ? find() : null;
-      if (item) return item;
+    const item = state.menuRoot ? find() : null;
+    if (item) return item;
 
-      if (find === findItem) {
-        const nodeItem = findInAdded(watcher.added.slice(scanned));
-        scanned = watcher.added.length;
-        if (nodeItem) return nodeItem;
-      }
-
-      await sleep(120);
-    }
-    return null;
-  } finally {
-    watcher.stop();
+    await sleep(120);
   }
+  return null;
 }
 
 // quiet.css hides the menus while this attribute is on <html>. It stays on a little past the end so
@@ -427,9 +312,14 @@ function releaseFocus() {
   }
 }
 
-function closeMenu(picker) {
-  pressEscape();
-  if (picker?.isConnected && picker.getAttribute('aria-expanded') === 'true') humanClick(picker);
+// Escape closes the menu; the picker is clicked only if, after giving the page time to react, it
+// still reports the menu as open. Nothing is sent when the menu is already closed.
+async function closeMenu(picker) {
+  const expanded = () => picker?.isConnected && picker.getAttribute('aria-expanded') === 'true';
+  if (expanded() || isVisible(state.menuRoot)) {
+    pressEscape();
+    if (!(await waitFor(() => !expanded(), 500, 50))) humanClick(picker);
+  }
   releaseFocus();
 }
 
@@ -468,15 +358,14 @@ async function attemptSelection({ force = false } = {}) {
       return { ok: false, reason: 'no-picker' };
     }
     state.pickerText = textOf(picker).trim();
-    const pinned = Boolean(state.settings.modeId);
-    // The picker has no model id, so a pinned model can only be checked in the open menu.
-    if (!pinned && onTarget(picker)) {
-      state.satisfied = true;
-      state.lastError = '';
-      log('already on target', state.pickerText);
-      return { ok: true, already: true, text: state.pickerText };
+    if (!state.settings.modeId) {
+      state.lastError = 'Chưa chọn model: mở popup, chọn model rồi bấm Lưu';
+      return { ok: false, reason: 'not-configured' };
     }
-    if (pinned && !force && state.settings.applied === appliedKey(picker)) {
+    const wantLevel = state.settings.levelIndex >= 0;
+    // The picker shows neither the model id nor (in the narrow layout) the thinking level, so its
+    // text proves nothing about a pinned level. Only a model-only pin can be trusted from the text.
+    if (!wantLevel && !force && state.settings.applied === appliedKey(picker)) {
       state.satisfied = true;
       state.lastError = '';
       log('same as last time, menu left alone', state.pickerText);
@@ -487,20 +376,18 @@ async function attemptSelection({ force = false } = {}) {
       return { ok: false, reason: 'user-busy' };
     }
     hideMenus();
-    const item = await openMenuAndFind(picker, pinned ? pinnedMode : findItem);
+    const item = await openMenuAndFind(picker, pinnedMode);
     if (!item) {
-      closeMenu(picker);
-      state.lastError = pinned
-        ? 'Không thấy model đã chọn trong menu (bấm “Lấy danh sách từ Gemini” rồi chọn lại)'
-        : `Không thấy mục khớp "${state.settings.target}"`;
-      log('no matching item, candidates:', state.candidates);
-      return { ok: false, reason: 'no-item', candidates: state.candidates };
+      await closeMenu(picker);
+      state.lastError = 'Không thấy model đã chọn trong menu (bấm “Lấy danh sách từ Gemini” rồi chọn lại)';
+      log('pinned model not in the menu');
+      return { ok: false, reason: 'no-item' };
     }
-    const wantLevel = pinned && state.settings.levelIndex >= 0;
-    if (pinned && item.querySelector('.selected')) {
+    state.menuRoot = item.closest(OVERLAY_SELECTOR) ?? state.menuRoot;
+    if (item.querySelector('.selected')) {
       log('pinned model already selected', modeLabel(item));
       const level = wantLevel ? await applyLevel(picker, true) : { ok: true };
-      closeMenu(picker);
+      await closeMenu(picker);
       if (!level.ok) {
         state.lastError = level.error;
         log(level.error);
@@ -512,34 +399,17 @@ async function attemptSelection({ force = false } = {}) {
       await rememberApplied();
       return { ok: true, already: true, text: modeLabel(item) };
     }
-    if (!pinned && (item.matches('.selected') || item.querySelector('.selected'))) {
-      // Already the model in use, whatever the picker's label says; clicking it proves nothing.
-      closeMenu(picker);
-      state.satisfied = true;
-      state.lastError = '';
-      log('target already selected in the menu', textOf(item).trim());
-      return { ok: true, already: true, text: textOf(item).trim() };
-    }
-    log('clicking', textOf(item).trim());
-    const beforeSignature = pickerSignature(picker);
-    humanClick(pinned ? (item.querySelector('.label') ?? item) : item);
+    log('clicking', modeLabel(item));
+    humanClick(item.querySelector('.label') ?? item);
+    // Picking a model closes the menu we saw (or marks the item selected if it stays open).
     const confirmed = await waitFor(
-      () => {
-        // Picking a model closes the menu, so a pinned model counts as done once it has gone.
-        if (pinned) return isVisible(state.menuRoot) ? null : findModelPicker();
-        const again = findModelPicker();
-        if (!again) return null;
-        const signature = pickerSignature(again);
-        if (onTarget(again)) return again;
-        if (signature && signature !== beforeSignature) return again;
-        return null;
-      },
+      () => (item.querySelector('.selected') || !isVisible(state.menuRoot) ? findModelPicker() : null),
       3000,
       120,
     );
     if (confirmed && wantLevel) {
       const level = await applyLevel(picker, false);
-      closeMenu(picker);
+      await closeMenu(picker);
       if (!level.ok) {
         state.lastError = level.error;
         log(level.error);
@@ -556,7 +426,7 @@ async function attemptSelection({ force = false } = {}) {
       log('confirmed', state.pickerText);
       return { ok: true, text: state.pickerText };
     }
-    closeMenu(picker);
+    await closeMenu(picker);
     state.lastError = 'Đã bấm nhưng chưa xác nhận được model';
     log('unconfirmed');
     return { ok: false, reason: 'unconfirmed' };
@@ -574,7 +444,7 @@ async function listOptions() {
     if (!picker) return { ok: false, lastError: 'Không tìm thấy nút chọn model' };
     hideMenus();
     if (!(await openMenuAndFind(picker, () => modeItems()[0] ?? null))) {
-      closeMenu(picker);
+      await closeMenu(picker);
       return { ok: false, lastError: 'Không đọc được danh sách model từ menu' };
     }
     const models = modeItems().map((item) => ({
@@ -589,7 +459,7 @@ async function listOptions() {
       label: textOf(item).split('\n')[0].trim(),
       selected: Boolean(item.querySelector('.selected')),
     }));
-    closeMenu(picker);
+    await closeMenu(picker);
     const levelError = !trigger
       ? 'Không thấy mục “Cấp độ tư duy” trong menu'
       : levels.length === 0
@@ -625,18 +495,13 @@ function scheduleAuto(delay = 0) {
     if (state.satisfied || !state.settings.enabled) return;
     const result = await attemptSelection();
     reportSeen(result.ok ? 'ok' : result.reason ?? 'failed');
-    if (result.ok) return;
-    if (result.reason === 'user-busy') {
-      scheduleAuto(4000);
-      return;
-    }
-    if (result.reason === 'busy' || result.reason === 'disabled') {
-      scheduleAuto(RETRY_MS);
-      return;
-    }
+    if (result.ok || result.reason === 'not-configured') return;
+    // Every miss counts, so a page that keeps the user busy (or the menu occupied) ends after
+    // MAX_ATTEMPTS instead of waking up forever.
     state.attempts += 1;
-    if (['no-item', 'unconfirmed', 'no-level'].includes(result.reason) && state.attempts >= 3) return;
-    if (state.attempts < MAX_ATTEMPTS) scheduleAuto(RETRY_MS);
+    if (['no-item', 'unconfirmed', 'no-level'].includes(result.reason)) state.failures += 1;
+    if (state.failures >= MAX_FAILURES || state.attempts >= MAX_ATTEMPTS) return;
+    scheduleAuto(result.reason === 'user-busy' ? 4000 : RETRY_MS);
   }, delay);
 }
 
@@ -659,10 +524,8 @@ function statusResponse() {
     target: state.settings.target,
     pinned: Boolean(state.settings.modeId),
     pickerText,
-    matched: picker ? onTarget(picker) : matchesTarget(pickerText),
-    satisfied: state.satisfied,
+    matched: state.satisfied,
     lastError: state.lastError,
-    candidates: state.candidates,
   };
 }
 
@@ -695,6 +558,7 @@ async function init() {
     }
     state.satisfied = false;
     state.attempts = 0;
+    state.failures = 0;
     scheduleAuto(0);
   });
 
@@ -704,7 +568,8 @@ async function init() {
     if (type === 'select-now') {
       state.satisfied = false;
       state.attempts = 0;
-      return attemptSelection({ force: true });
+      state.failures = 0;
+      return attemptSelection({ force: true }).then((r) => ({ ...r, lastError: r.ok ? '' : state.lastError }));
     }
     return undefined;
   }
@@ -712,10 +577,12 @@ async function init() {
   api.runtime.onMessage.addListener((message) => handleCommand(message?.type));
 
   // The popup cannot message a frame that is not a tab (Firefox's AI chatbot sidebar), so it can
-  // also post a command to storage; every Gemini frame answers it there.
+  // also post a command to storage. Only a frame on screen answers it, so a Gemini tab in the
+  // background does not start driving its menu; the ack lets the popup stop waiting if none does.
   api.storage.onChanged.addListener(async (changes, area) => {
     const cmd = area === 'local' ? changes.cmd?.newValue : null;
-    if (!cmd) return;
+    if (!cmd || document.visibilityState !== 'visible') return;
+    await api.storage.local.set({ cmdAck: cmd.id });
     const result = (await handleCommand(cmd.type)) ?? null;
     await api.storage.local.set({ cmdResult: { id: cmd.id, result } });
   });
@@ -723,7 +590,7 @@ async function init() {
   reportSeen('started');
   // Once per page load: go as soon as the model button exists, then stay idle. Nothing polls or
   // watches afterwards; it only acts again on a popup command or when the settings change.
-  waitFor(findModelPicker, 30000, 200).then((picker) => {
+  waitFor(findModelPicker, 120000, 500).then((picker) => {
     if (picker) scheduleAuto(0);
   });
 }

@@ -2,7 +2,7 @@ const api = globalThis.browser ?? globalThis.chrome;
 
 const DEFAULTS = {
   enabled: true,
-  target: '3.8 Flash',
+  target: '', // label of the pinned model, for display only
   modeId: '',
   levelIndex: -1,
   debug: false,
@@ -15,43 +15,37 @@ const els = {
   model: document.getElementById('model'),
   level: document.getElementById('level'),
   fetch: document.getElementById('fetch'),
-  target: document.getElementById('target'),
   debug: document.getElementById('debug'),
   save: document.getElementById('save'),
   now: document.getElementById('now'),
   status: document.getElementById('status'),
-  candidates: document.getElementById('candidates'),
 };
 
 // What is saved, for when the lists are fetched again before the user has pressed Save.
-let saved = { modeId: '', levelIndex: -1 };
+let saved = { modeId: '', levelIndex: -1, label: '' };
 
 function setStatus(message, tone = '') {
   els.status.textContent = message;
   els.status.className = `status ${tone}`.trim();
 }
 
-function renderCandidates(list = []) {
-  els.candidates.replaceChildren(
-    ...list.slice(0, 10).map((text) => {
-      const li = document.createElement('li');
-      li.textContent = text;
-      return li;
-    }),
-  );
-}
-
 // Models are identified by Gemini's own id and levels by their position in the menu, so neither
 // depends on the interface language; the labels shown are just what Gemini displays.
 function fillLists(models, levels, modeId, levelIndex) {
-  els.model.replaceChildren(
-    new Option('Không chọn (dùng so chữ ở mục nâng cao)', ''),
-    ...models.map((model) => {
-      const option = new Option(model.label + (model.selected ? ' (đang dùng)' : ''), model.id);
-      option.dataset.label = model.label;
-      return option;
-    }),
-  );
+  const options = models.map((model) => {
+    const option = new Option(model.label + (model.selected ? ' (đang dùng)' : ''), model.id);
+    option.dataset.label = model.label;
+    return option;
+  });
+  // A saved model that the fetched menu does not list stays selectable, so pressing Save does not
+  // quietly drop it.
+  if (modeId && !models.some((model) => model.id === modeId)) {
+    const label = saved.label || modeId;
+    const option = new Option(`${label} (đã lưu, không thấy trong menu hiện tại)`, modeId);
+    option.dataset.label = saved.label;
+    options.unshift(option);
+  }
+  els.model.replaceChildren(new Option('Không chọn (không tự chuyển)', ''), ...options);
   els.model.value = modeId;
   if (els.model.selectedIndex < 0) els.model.value = '';
 
@@ -69,30 +63,36 @@ function currentSettings() {
   if (els.model.value && picked) {
     return { ...settings, modeId: els.model.value, target: picked.dataset.label, levelIndex: Number(els.level.value) };
   }
-  return { ...settings, modeId: '', levelIndex: -1, target: els.target.value.trim() || DEFAULTS.target };
+  return { ...settings, modeId: '', levelIndex: -1, target: '' };
 }
 
 async function saveSettings() {
   const settings = currentSettings();
   await api.storage.local.set(settings);
-  saved = { modeId: settings.modeId, levelIndex: settings.levelIndex };
+  saved = { modeId: settings.modeId, levelIndex: settings.levelIndex, label: settings.target };
 }
 
 // For a Gemini frame that is not a tab (the AI chatbot sidebar): post the command to storage and
-// wait for a Gemini frame to answer it there.
+// wait for a visible Gemini frame to answer it there. A frame acknowledges at once; with no ack
+// the popup gives up quickly instead of waiting out the long timeout meant for slow work.
 function viaStorage(message) {
   const id = `${Date.now()}-${Math.random()}`;
   return new Promise((resolve) => {
     const finish = (value) => {
       api.storage.onChanged.removeListener(onChanged);
       clearTimeout(timer);
+      clearTimeout(ackTimer);
+      api.storage.local.remove(['cmd', 'cmdAck', 'cmdResult']).catch(() => {});
       resolve(value);
     };
     const onChanged = (changes, area) => {
-      const reply = area === 'local' ? changes.cmdResult?.newValue : null;
+      if (area !== 'local') return;
+      if (changes.cmdAck?.newValue === id) clearTimeout(ackTimer);
+      const reply = changes.cmdResult?.newValue;
       if (reply?.id === id) finish(reply.result);
     };
     const timer = setTimeout(() => finish(null), 40000);
+    const ackTimer = setTimeout(() => finish(null), 3000);
     api.storage.onChanged.addListener(onChanged);
     api.storage.local.set({ cmd: { id, type: message.type } });
   });
@@ -113,20 +113,20 @@ const NO_TAB = 'Không kết nối được với Gemini (tab hoặc sidebar AI)
 function renderStatus(data) {
   if (!data) {
     setStatus(NO_TAB, 'warn');
-    renderCandidates();
     return;
   }
   const current = data.pickerText ? `Hiện tại: ${data.pickerText}` : 'Chưa đọc được model hiện tại';
   if (!data.enabled) {
     setStatus(`Tự động chuyển model đang TẮT: tick ô “Tự động chuyển model” rồi bấm Lưu (nút “Chọn ngay” vẫn dùng được).\n${current}`, 'warn');
+  } else if (!data.pinned) {
+    setStatus(`Chưa chọn model: chọn một model ở trên rồi bấm Lưu.\n${current}`, 'warn');
   } else if (data.matched) {
-    setStatus(`Đang đúng model đích.\n${current}`, 'ok');
+    setStatus(`Đã áp dụng${data.target ? `: ${data.target}` : ''}.\n${current}`, 'ok');
   } else if (data.lastError) {
     setStatus(`${data.lastError}.\n${current}`, 'warn');
   } else {
-    setStatus(`${current}\nĐích: ${data.target}${data.pinned ? ' (chọn theo ID)' : ''}`);
+    setStatus(`${current}${data.target ? `\nĐích: ${data.target}` : ''}`);
   }
-  renderCandidates(data.candidates);
 }
 
 async function refresh() {
@@ -174,9 +174,8 @@ async function fetchLists() {
 async function load() {
   const stored = await api.storage.local.get(DEFAULTS);
   els.enabled.checked = stored.enabled !== false;
-  els.target.value = stored.target || DEFAULTS.target;
   els.debug.checked = stored.debug === true;
-  saved = { modeId: stored.modeId, levelIndex: stored.levelIndex };
+  saved = { modeId: stored.modeId, levelIndex: stored.levelIndex, label: stored.target };
   fillLists(stored.modelList, stored.levelList, stored.modeId, stored.levelIndex);
   if (stored.modelList.length === 0) await fetchLists();
   else await refresh();
@@ -199,10 +198,8 @@ els.now.addEventListener('click', async () => {
   }
   if (result.ok) {
     setStatus(`Xong: ${result.text ?? 'đã chọn model đích'}.`, 'ok');
-    renderCandidates();
   } else {
     setStatus(result.lastError ?? `Thất bại: ${result.reason ?? 'không rõ lý do'}`, 'warn');
-    renderCandidates(result.candidates ?? []);
   }
   setTimeout(refresh, 1200);
 });
