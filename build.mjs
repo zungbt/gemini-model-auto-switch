@@ -16,6 +16,7 @@ const files = [
   manifest.action.default_popup,
   'popup.js',
   ...Object.values(manifest.icons ?? {}),
+  ...(typeof manifest.action.default_icon === 'string' ? [manifest.action.default_icon] : Object.values(manifest.action.default_icon ?? {})),
 ];
 const names = [...new Set(files)].sort();
 

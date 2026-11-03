@@ -37,7 +37,6 @@
         margin-bottom: 4px;
         opacity: 0.75;
       }
-      input[type="text"],
       select {
         width: 100%;
         box-sizing: border-box;
@@ -83,16 +82,6 @@
       .status.warn {
         background: color-mix(in srgb, #d93025 16%, transparent);
       }
-      .candidates {
-        margin: 0;
-        padding-left: 16px;
-        opacity: 0.8;
-        max-height: 130px;
-        overflow: auto;
-      }
-      .candidates:empty {
-        display: none;
-      }
       .hint {
         margin: 0;
         opacity: 0.6;
@@ -119,11 +108,6 @@
       <button id="fetch">Lấy danh sách từ Gemini</button>
     </div>
 
-    <details class="field">
-      <summary>Nâng cao: so chữ thay vì chọn model</summary>
-      <input type="text" id="target" placeholder="3.8 Flash" spellcheck="false" />
-    </details>
-
     <label class="row"><input type="checkbox" id="debug" /> Ghi log ra console</label>
 
     <div class="actions">
@@ -132,7 +116,6 @@
     </div>
 
     <p id="status" class="status">Đang kiểm tra…</p>
-    <ul id="candidates" class="candidates"></ul>
     <p class="hint">Chọn model và mức rồi bấm Lưu. Danh sách lấy từ menu của Gemini nên đúng với ngôn ngữ và tài khoản của bạn. Nếu không chuyển được: bật “Ghi log ra console” và xem log trong DevTools của tab Gemini.</p>
 
     <script src="popup.js"></script>
