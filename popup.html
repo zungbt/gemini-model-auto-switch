@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      :root {
+        color-scheme: light dark;
+        font: 13px/1.45 system-ui, "Segoe UI", sans-serif;
+      }
+      body {
+        margin: 0;
+        padding: 14px;
+        width: 320px;
+        background: Canvas;
+        color: CanvasText;
+      }
+      h1 {
+        margin: 0 0 12px;
+        font-size: 14px;
+        font-weight: 600;
+      }
+      label {
+        display: block;
+      }
+      .row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 10px;
+        cursor: pointer;
+      }
+      .field {
+        margin-bottom: 10px;
+      }
+      .field span {
+        display: block;
+        margin-bottom: 4px;
+        opacity: 0.75;
+      }
+      input[type="text"],
+      select {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 6px 8px;
+        border: 1px solid color-mix(in srgb, CanvasText 25%, transparent);
+        border-radius: 6px;
+        background: Field;
+        color: FieldText;
+        font: inherit;
+      }
+      .actions {
+        display: flex;
+        gap: 8px;
+        margin: 12px 0 10px;
+      }
+      button {
+        flex: 1;
+        padding: 7px 10px;
+        border: 1px solid color-mix(in srgb, CanvasText 25%, transparent);
+        border-radius: 6px;
+        background: ButtonFace;
+        color: ButtonText;
+        font: inherit;
+        cursor: pointer;
+      }
+      button.primary {
+        background: #1a73e8;
+        border-color: #1a73e8;
+        color: #fff;
+        font-weight: 600;
+      }
+      .status {
+        margin: 0 0 8px;
+        padding: 8px 10px;
+        border-radius: 6px;
+        background: color-mix(in srgb, CanvasText 7%, transparent);
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+      .status.ok {
+        background: color-mix(in srgb, #1e8e3e 18%, transparent);
+      }
+      .status.warn {
+        background: color-mix(in srgb, #d93025 16%, transparent);
+      }
+      .candidates {
+        margin: 0;
+        padding-left: 16px;
+        opacity: 0.8;
+        max-height: 130px;
+        overflow: auto;
+      }
+      .candidates:empty {
+        display: none;
+      }
+      .hint {
+        margin: 0;
+        opacity: 0.6;
+        font-size: 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Gemini Model Auto-Switch</h1>
+
+    <label class="row"><input type="checkbox" id="enabled" /> Tự động chuyển model</label>
+
+    <label class="field">
+      <span>Model</span>
+      <select id="model"></select>
+    </label>
+
+    <label class="field">
+      <span>Mức tư duy (theo model đang dùng trên Gemini)</span>
+      <select id="level"></select>
+    </label>
+
+    <div class="actions">
+      <button id="fetch">Lấy danh sách từ Gemini</button>
+    </div>
+
+    <details class="field">
+      <summary>Nâng cao: so chữ thay vì chọn model</summary>
+      <input type="text" id="target" placeholder="3.8 Flash" spellcheck="false" />
+    </details>
+
+    <label class="row"><input type="checkbox" id="debug" /> Ghi log ra console</label>
+
+    <div class="actions">
+      <button id="save" class="primary">Lưu</button>
+      <button id="now">Chọn ngay</button>
+    </div>
+
+    <p id="status" class="status">Đang kiểm tra…</p>
+    <ul id="candidates" class="candidates"></ul>
+    <p class="hint">Chọn model và mức rồi bấm Lưu. Danh sách lấy từ menu của Gemini nên đúng với ngôn ngữ và tài khoản của bạn. Nếu không chuyển được: bật “Ghi log ra console” và xem log trong DevTools của tab Gemini.</p>
+
+    <script src="popup.js"></script>
+  </body>
+</html>
