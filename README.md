@@ -1,25 +1,39 @@
 # Gemini Model Auto-Switch (extension cho Waterfox)
 
-Extension WebExtension (manifest MV3) cho Waterfox 6.x / Firefox: khi tải `https://gemini.google.com/app`, nó tự mở menu model và chọn đúng model + mức tư duy bạn đã ghim trong popup. Cần Waterfox/Firefox 127 trở lên. Cài xong phải mở popup, chọn model rồi bấm **Lưu**: chưa chọn thì extension không làm gì.
+Extension WebExtension (manifest MV3) cho Waterfox 6.x / Firefox: khi tải `https://gemini.google.com/app`, nó tự mở menu model và chọn đúng model + mức tư duy bạn đã ghim trong popup. Cần Waterfox 6 hoặc Firefox 127 trở lên. Cài xong phải mở popup, chọn model rồi bấm **Lưu**: chưa chọn thì extension không làm gì.
 
-## Cài đặt
+## Cài đặt (dành cho người dùng)
 
-**Tạm thời (nhanh nhất, mất khi khởi động lại Waterfox):**
+Không cần biết lập trình. Mất khoảng một phút.
 
-1. Mở `about:debugging#/runtime/this-firefox`
-2. **Load Temporary Add-on…**
-3. Chọn file `manifest.json` trong repo này
+1. **Tải file về:** vào trang [Releases](https://github.com/zungbt/gemini-model-auto-switch/releases/latest) và bấm vào file có đuôi `.xpi` (ví dụ `gemini-model-auto-switch-1.3.0.xpi`).
+2. **Cài vào Waterfox:** mở Waterfox rồi **kéo file `.xpi` vừa tải thả vào cửa sổ trình duyệt**. Khi hiện hộp thoại hỏi, bấm **Thêm** (Add).
+   - Cách khác: gõ `about:addons` vào thanh địa chỉ → bấm biểu tượng bánh răng ⚙ → **Install Add-on From File…** → chọn file `.xpi`.
+3. **Chọn model:** mở [gemini.google.com](https://gemini.google.com/app), bấm biểu tượng extension trên thanh công cụ, chọn model (và mức tư duy nếu muốn) rồi bấm **Lưu**.
 
-**Cố định (đóng gói .xpi):**
+Từ lần sau, mỗi lần mở Gemini extension tự chọn đúng model bạn đã lưu. Muốn đổi thì mở lại popup.
+
+Trên Gemini bản sidebar AI của Waterfox (mở từ menu thanh bên) cũng dùng được y như vậy.
+
+**Firefox thường thì sao?** Firefox bản chính thức chỉ cho cài add-on đã được Mozilla ký, mà bản này chưa ký, nên có thể báo “add-on không được xác minh”. Dùng Waterfox thì không bị chặn. Firefox Developer Edition, Nightly và ESR cũng cài được sau khi đặt `xpinstall.signatures.required` thành `false` trong `about:config`.
+
+**Gỡ cài đặt:** `about:addons` → Extensions → ⋯ cạnh “Gemini Model Auto-Switch” → Remove.
+
+## Cho người phát triển
+
+**Chạy thử tạm thời (mất khi khởi động lại trình duyệt):** mở `about:debugging#/runtime/this-firefox` → **Load Temporary Add-on…** → chọn `manifest.json` trong repo.
+
+**Đóng gói `.xpi`:**
 
 ```bash
 node build.mjs     # cần Node >= 22.2, ra dist/gemini-model-auto-switch-<version>.xpi
 ```
 
-Rồi mở `about:addons` → ⚙ → **Install Add-on From File…** → chọn `.xpi`. Chỉ đóng gói các file extension thật sự dùng (không kèm README, `build.mjs`, v.v.). Đừng dùng `Compress-Archive` của PowerShell 5.1: nó ghi đường dẫn bằng `\` và Firefox coi gói là hỏng.
+Chỉ đóng gói các file extension thật sự dùng (không kèm README, `build.mjs`, v.v.). Đừng dùng `Compress-Archive` của PowerShell 5.1: nó ghi đường dẫn bằng `\` và Firefox coi gói là hỏng.
 
-Muốn bản đã ký (cài được trên Firefox thường): nộp `.xpi` lên https://addons.mozilla.org/developers/ với kênh **On your own** (unlisted).
-Nếu Waterfox báo add-on chưa ký, đặt `xpinstall.signatures.required = false` trong `about:config` (Waterfox thường cho phép add-on chưa ký; nếu vẫn chặn thì dùng cách tải tạm ở trên).
+**Bản đã ký cho Firefox thường:** nộp `.xpi` lên https://addons.mozilla.org/developers/ với kênh **On your own** (unlisted) để nhận file đã ký, hoặc đăng công khai lên addons.mozilla.org để người dùng cài bằng một cú bấm.
+
+**Phát hành:** tăng `version` trong `manifest.json`, chạy `node build.mjs`, rồi đính kèm file trong `dist/` vào một GitHub Release.
 
 ## Dùng
 
