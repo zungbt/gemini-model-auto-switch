@@ -1,0 +1,12 @@
+/* While the extension drives Gemini's model menu (content.js sets data-gms-quiet on <html>), keep
+   the menus out of sight. clip-path hides them without changing their size, opacity or
+   visibility, so they still lay out and take the extension's clicks like normal. */
+html[data-gms-quiet] gem-menu,
+html[data-gms-quiet] .popover-menu,
+html[data-gms-quiet] .cdk-overlay-pane {
+  clip-path: inset(100%) !important;
+}
+
+html[data-gms-quiet] .cdk-overlay-backdrop {
+  opacity: 0 !important;
+}
