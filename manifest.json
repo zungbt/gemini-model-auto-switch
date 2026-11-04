@@ -4,8 +4,7 @@
   "version": "1.3.0",
   "description": "Tự động chọn model và mức tư duy đã ghim trên gemini.google.com mỗi lần tải trang.",
   "icons": {
-    "48": "icon.svg",
-    "96": "icon.svg"
+    "128": "icon-128.png"
   },
   "browser_specific_settings": {
     "gecko": {
@@ -29,7 +28,7 @@
   ],
   "action": {
     "default_title": "Gemini Model Auto-Switch",
-    "default_icon": "icon.svg",
+    "default_icon": "icon-128.png",
     "default_popup": "popup.html"
   }
 }
