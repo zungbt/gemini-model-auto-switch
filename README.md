@@ -20,6 +20,9 @@ Gỡ: `about:addons` → Extensions → Remove.
 
 Trên Edge, extension chạy trong tab Gemini; sidebar của Edge không được hỗ trợ. Đừng tắt Developer mode: Edge sẽ tắt luôn extension.
 
+Cập nhật: Edge không tự cập nhật bản này. Giải nén file `.zip` mới đè lên thư mục cũ, rồi bấm **Tải lại** (Reload) ở extension trong `edge://extensions`.
+Gỡ: `edge://extensions` → **Xoá** (Remove).
+
 ## Dùng
 
 | Mục | Ý nghĩa |
