@@ -589,10 +589,31 @@ async function init() {
 
   reportSeen('started');
   // Once per page load: go as soon as the model button exists, then stay idle. Nothing polls or
-  // watches afterwards; it only acts again on a popup command or when the settings change.
-  waitFor(findModelPicker, 120000, 500).then((picker) => {
-    if (picker) scheduleAuto(0);
-  });
+  // watches afterwards; it only acts again on a popup command, when the settings change, or when
+  // the page comes back on screen without having succeeded yet.
+  let waitingForPicker = false;
+  function watchForPicker() {
+    if (waitingForPicker) return;
+    waitingForPicker = true;
+    waitFor(findModelPicker, 120000, 500).then((picker) => {
+      waitingForPicker = false;
+      if (picker) scheduleAuto(0);
+    });
+  }
+  watchForPicker();
+
+  // A sidebar can load while closed (the button has no size, so it is never found) and be opened
+  // long after the wait above or the retries gave up. Showing or focusing the page starts over.
+  // Misses that retrying cannot fix (the pinned model is not in the menu, say) are not retried.
+  function retryWhenShown() {
+    if (document.visibilityState !== 'visible' || state.satisfied || !state.settings.enabled) return;
+    if (state.failures >= MAX_FAILURES) return;
+    log('page shown, trying again');
+    state.attempts = 0;
+    watchForPicker();
+  }
+  document.addEventListener('visibilitychange', retryWhenShown);
+  window.addEventListener('focus', retryWhenShown);
 }
 
 init();
