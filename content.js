@@ -12,6 +12,7 @@ const PICKER_SELECTORS = [
   '.input-area-switch',
   'button[aria-label*="chế độ" i]',
   'button[aria-label*="chọn chế độ" i]',
+  'button[aria-label*="mode picker" i]', // before data-test-id, which first hits a wrapper in the narrow layout
   '[data-test-id*="model" i]',
   '[data-test-id*="mode" i]',
   'button[aria-label*="model" i]',
