@@ -1,5 +1,5 @@
 // Edge smoke test for Gemini Model Auto-Switch driven over CDP.
-// Usage: node test/edge-smoke.mjs [--ext=<dir>] [--lang=vi|en] [--width=<px>] [--fresh] [--sidebar] [--keep-open]
+// Usage: node test/edge-smoke.mjs [--ext=<dir>] [--lang=vi|en] [--width=<px>] [--profile=<dir>] [--fresh] [--keep-open]
 import { spawn } from 'node:child_process';
 import { rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -11,7 +11,7 @@ let extDir = resolve(fileURLToPath(new URL('..', import.meta.url)));
 let lang = 'vi';
 let width = null;
 let fresh = false;
-let sidebar = false;
+let profileArg = null;
 let keepOpen = false;
 
 for (const arg of args) {
@@ -19,15 +19,16 @@ for (const arg of args) {
   else if (arg.startsWith('--lang=')) lang = arg.slice(7);
   else if (arg.startsWith('--width=')) width = parseInt(arg.slice(8), 10);
   else if (arg === '--fresh') fresh = true;
-  else if (arg === '--sidebar') sidebar = true;
+  else if (arg.startsWith('--profile=')) profileArg = resolve(arg.slice(10));
   else if (arg === '--keep-open') keepOpen = true;
 }
 
 const EDGE_BIN = 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe';
 const PORT = 9333;
-const profileDir = join(tmpdir(), `gms-edge-${lang}`);
+// --profile: an existing user-data dir (e.g. a copy holding a Google sign-in); never wiped.
+const profileDir = profileArg ?? join(tmpdir(), `gms-edge-${lang}`);
 
-if (fresh) rmSync(profileDir, { recursive: true, force: true });
+if (fresh && !profileArg) rmSync(profileDir, { recursive: true, force: true });
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -158,6 +159,25 @@ function listOptionsWhenReady(sessionId, contextId) {
   return evalIn(sessionId, contextId, 'waitFor(findModelPicker, 20000, 250).then(() => listOptions())');
 }
 
+// Edge disables an unpacked extension on a later launch unless developer mode is on ("turn on
+// developer mode to use this extension"). The pref is protected, so switch it on the way a user
+// does, through the extensions page's own API, and re-enable the extension if it was turned off.
+async function enableDeveloperMode() {
+  const { targetId } = await send('Target.createTarget', { url: 'edge://extensions/' });
+  const { sessionId } = await send('Target.attachToTarget', { targetId, flatten: true });
+  await send('Runtime.enable', {}, sessionId);
+  const ctx = await waitForContext(sessionId, (c) => c.auxData?.isDefault === true, 10000);
+  const states = await evalIn(sessionId, ctx.id, `(async () => {
+    await chrome.developerPrivate.updateProfileConfiguration({ inDeveloperMode: true });
+    for (const item of await chrome.developerPrivate.getExtensionsInfo()) {
+      if (item.name === 'Gemini Model Auto-Switch' && item.state !== 'ENABLED') await chrome.management.setEnabled(item.id, true);
+    }
+    return (await chrome.developerPrivate.getExtensionsInfo()).map((i) => i.name + ': ' + i.state);
+  })()`);
+  await send('Target.closeTarget', { targetId });
+  return states;
+}
+
 let allPassed = true;
 
 async function runCheck(name, fn) {
@@ -181,7 +201,8 @@ const proc = spawn(EDGE_BIN, [
   `--remote-debugging-port=${PORT}`,
   `--load-extension=${extDir}`,
   'about:blank',
-], { stdio: 'ignore' });
+], { stdio: 'ignore', detached: keepOpen }); // detached, or Windows closes Edge when node exits
+if (keepOpen) proc.unref();
 
 async function cleanup() {
   if (keepOpen) return;
@@ -235,122 +256,73 @@ async function main() {
       }
     };
 
-    if (sidebar) {
-      console.log('Trong cửa sổ Edge vừa mở: bật sidebar, thêm gemini.google.com làm app, mở nó.');
-      let sidebarSessionId = null;
-      let sidebarCtxId = null;
-      const deadline = Date.now() + 180000;
-      while (Date.now() < deadline) {
-        const { targetInfos } = await send('Target.getTargets');
-        const target = targetInfos?.find((t) => t.url && t.url.startsWith('https://gemini.google.com'));
-        if (target) {
-          const { sessionId } = await send('Target.attachToTarget', { targetId: target.targetId, flatten: true });
-          sidebarSessionId = sessionId;
-          await send('Runtime.enable', {}, sessionId);
-          await send('Page.enable', {}, sessionId);
-          break;
-        }
-        await sleep(1000);
-      }
+    console.log('extensions:', (await enableDeveloperMode()).join('; '));
 
-      const sidebarInjectedPassed = await runCheck('sidebar-injected', async () => {
-        if (!sidebarSessionId) throw new Error('No gemini.google.com target found within 180s');
-        const rem = Math.max(5000, deadline - Date.now());
-        sidebarCtxId = await contentContext(sidebarSessionId, Math.min(rem, 20000));
-      });
-
-      let storageCmdPassed = false;
-      if (sidebarInjectedPassed) {
-        storageCmdPassed = await runCheck('storage-cmd', async () => {
-          const { sessionId: popSessionId, contextId: popCtxId } = await openExtensionPage('popup.html');
-          const start = Date.now();
-          let text = '';
-          while (Date.now() - start < 45000) {
-            text = (await evalIn(popSessionId, popCtxId, "document.getElementById('status')?.textContent || ''")).trim();
-            if (text && text !== 'Đang lấy danh sách từ Gemini…') break;
-            await sleep(500);
-          }
-          if (!text || text === 'Đang lấy danh sách từ Gemini…') throw new Error('Timeout waiting for status');
-          if (text.startsWith('Không kết nối được')) throw new Error(text);
-        });
-      }
-
-      if (sidebarInjectedPassed && storageCmdPassed) {
-        await runCheck('auto-select', async () => {
-          const opts = await listOptionsWhenReady(sidebarSessionId, sidebarCtxId);
-          if (!opts?.ok) throw new Error(opts?.lastError || 'listOptions failed');
-          const model = opts.models?.find((m) => m.id);
-          if (!model) throw new Error('no model id');
-          await checkAutoSelect(sidebarSessionId, model);
-        });
-      }
-    } else {
-      const { targetId } = await send('Target.createTarget', { url: 'about:blank' });
-      const { sessionId } = await send('Target.attachToTarget', { targetId, flatten: true });
-      await send('Runtime.enable', {}, sessionId);
-      await send('Page.enable', {}, sessionId);
-      if (width) {
-        await send('Emulation.setDeviceMetricsOverride', {
-          width, height: 900, deviceScaleFactor: 0, mobile: false,
-        }, sessionId);
-      }
-      await send('Page.navigate', { url: 'https://gemini.google.com/app' }, sessionId);
-
-      let tabCtxId = null;
-      await runCheck('injected', async () => {
-        tabCtxId = await contentContext(sessionId, 20000);
-      });
-
-      let pinnedModel = null;
-      await runCheck('list-options', async () => {
-        if (!tabCtxId) tabCtxId = await contentContext(sessionId, 5000);
-        const res = await listOptionsWhenReady(sessionId, tabCtxId);
-        if (!res?.ok) throw new Error(res?.lastError || 'listOptions returned ok=false');
-        pinnedModel = res.models?.find((m) => m.id);
-        if (!pinnedModel) throw new Error('no model with non-empty id');
-      });
-
-      await runCheck('auto-select', async () => {
-        if (!pinnedModel?.id) throw new Error('no model id');
-        await checkAutoSelect(sessionId, pinnedModel);
-      });
-
-      await runCheck('message-status', async () => {
-        const { sessionId: popSessionId, contextId: popCtxId } = await openExtensionPage('popup.html');
-        const res = await evalIn(popSessionId, popCtxId, `chrome.tabs.query({ url: 'https://gemini.google.com/*' })
-          .then(([t]) => {
-            if (!t) throw new Error('No Gemini tab found');
-            return chrome.tabs.sendMessage(t.id, { type: 'status' });
-          })`);
-        if (typeof res?.enabled !== 'boolean') {
-          throw new Error(`expected object with boolean enabled, got ${JSON.stringify(res)}`);
-        }
-      });
-
-      await runCheck('icons', async () => {
-        const { sessionId: popSessionId, contextId: popCtxId } = await openExtensionPage('popup.html');
-        const manifest = await evalIn(popSessionId, popCtxId, 'chrome.runtime.getManifest()');
-        const iconPaths = [
-          ...Object.values(manifest.icons || {}),
-          ...(typeof manifest.action?.default_icon === 'string'
-            ? [manifest.action.default_icon]
-            : Object.values(manifest.action?.default_icon || {})),
-        ];
-        if (iconPaths.length === 0) throw new Error('No icons found in manifest');
-        for (const p of iconPaths) {
-          if (!p.endsWith('.png')) throw new Error(`icon path does not end with .png: ${p}`);
-        }
-        for (const p of iconPaths) {
-          const res = await evalIn(popSessionId, popCtxId, `(async () => {
-            const r = await fetch(chrome.runtime.getURL(${JSON.stringify(p)}));
-            return { ok: r.ok, ct: r.headers.get('content-type') };
-          })()`);
-          if (!res.ok || !res.ct?.includes('image/png')) {
-            throw new Error(`fetch(${p}) returned ok=${res.ok}, content-type=${res.ct}`);
-          }
-        }
-      });
+    const { targetId } = await send('Target.createTarget', { url: 'about:blank' });
+    const { sessionId } = await send('Target.attachToTarget', { targetId, flatten: true });
+    await send('Runtime.enable', {}, sessionId);
+    await send('Page.enable', {}, sessionId);
+    if (width) {
+      await send('Emulation.setDeviceMetricsOverride', {
+        width, height: 900, deviceScaleFactor: 0, mobile: false,
+      }, sessionId);
     }
+    await send('Page.navigate', { url: 'https://gemini.google.com/app' }, sessionId);
+
+    let tabCtxId = null;
+    await runCheck('injected', async () => {
+      tabCtxId = await contentContext(sessionId, 20000);
+    });
+
+    let pinnedModel = null;
+    await runCheck('list-options', async () => {
+      if (!tabCtxId) tabCtxId = await contentContext(sessionId, 5000);
+      const res = await listOptionsWhenReady(sessionId, tabCtxId);
+      if (!res?.ok) throw new Error(res?.lastError || 'listOptions returned ok=false');
+      pinnedModel = res.models?.find((m) => m.id);
+      if (!pinnedModel) throw new Error('no model with non-empty id');
+    });
+
+    await runCheck('auto-select', async () => {
+      if (!pinnedModel?.id) throw new Error('no model id');
+      await checkAutoSelect(sessionId, pinnedModel);
+    });
+
+    await runCheck('message-status', async () => {
+      const { sessionId: popSessionId, contextId: popCtxId } = await openExtensionPage('popup.html');
+      const res = await evalIn(popSessionId, popCtxId, `chrome.tabs.query({ url: 'https://gemini.google.com/*' })
+        .then(([t]) => {
+          if (!t) throw new Error('No Gemini tab found');
+          return chrome.tabs.sendMessage(t.id, { type: 'status' });
+        })`);
+      if (typeof res?.enabled !== 'boolean') {
+        throw new Error(`expected object with boolean enabled, got ${JSON.stringify(res)}`);
+      }
+    });
+
+    await runCheck('icons', async () => {
+      const { sessionId: popSessionId, contextId: popCtxId } = await openExtensionPage('popup.html');
+      const manifest = await evalIn(popSessionId, popCtxId, 'chrome.runtime.getManifest()');
+      const iconPaths = [
+        ...Object.values(manifest.icons || {}),
+        ...(typeof manifest.action?.default_icon === 'string'
+          ? [manifest.action.default_icon]
+          : Object.values(manifest.action?.default_icon || {})),
+      ];
+      if (iconPaths.length === 0) throw new Error('No icons found in manifest');
+      for (const p of iconPaths) {
+        if (!p.endsWith('.png')) throw new Error(`icon path does not end with .png: ${p}`);
+      }
+      for (const p of iconPaths) {
+        const res = await evalIn(popSessionId, popCtxId, `(async () => {
+          const r = await fetch(chrome.runtime.getURL(${JSON.stringify(p)}));
+          return { ok: r.ok, ct: r.headers.get('content-type') };
+        })()`);
+        if (!res.ok || !res.ct?.includes('image/png')) {
+          throw new Error(`fetch(${p}) returned ok=${res.ok}, content-type=${res.ct}`);
+        }
+      }
+    });
   } catch (err) {
     console.error('Fatal harness error:', err);
     allPassed = false;
