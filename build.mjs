@@ -1,5 +1,6 @@
-// Packs the extension into dist/<name>-<version>.xpi: a zip with forward-slash paths, which Firefox
-// requires (PowerShell 5.1's Compress-Archive writes backslashes). No dependencies; node >= 22.2.
+// Packs the extension into dist/<name>-<version>.xpi (Firefox) and .zip (Edge): a zip with
+// forward-slash paths, which Firefox requires (PowerShell 5.1's Compress-Archive writes
+// backslashes). No dependencies; node >= 22.2.
 // Usage: node build.mjs
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { deflateRawSync, crc32 } from 'node:zlib';
@@ -52,7 +53,9 @@ const end = Buffer.concat([
 ]);
 
 const slug = manifest.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-const out = join(root, 'dist', `${slug}-${manifest.version}.xpi`);
-mkdirSync(dirname(out), { recursive: true });
-writeFileSync(out, Buffer.concat([...body, dir, end]));
-console.log(`${out}\n${names.join('\n')}`);
+const base = join(root, 'dist', `${slug}-${manifest.version}`);
+mkdirSync(dirname(base), { recursive: true });
+// The same archive twice: .xpi for Firefox/Waterfox, .zip for Edge.
+const archive = Buffer.concat([...body, dir, end]);
+for (const ext of ['xpi', 'zip']) writeFileSync(`${base}.${ext}`, archive);
+console.log(`${base}.xpi\n${base}.zip\n${names.join('\n')}`);

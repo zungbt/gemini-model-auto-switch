@@ -168,11 +168,12 @@ async function enableDeveloperMode() {
   await send('Runtime.enable', {}, sessionId);
   const ctx = await waitForContext(sessionId, (c) => c.auxData?.isDefault === true, 10000);
   const states = await evalIn(sessionId, ctx.id, `(async () => {
+    const before = (await chrome.developerPrivate.getProfileConfiguration()).inDeveloperMode;
     await chrome.developerPrivate.updateProfileConfiguration({ inDeveloperMode: true });
     for (const item of await chrome.developerPrivate.getExtensionsInfo()) {
       if (item.name === 'Gemini Model Auto-Switch' && item.state !== 'ENABLED') await chrome.management.setEnabled(item.id, true);
     }
-    return (await chrome.developerPrivate.getExtensionsInfo()).map((i) => i.name + ': ' + i.state);
+    return ['developer mode before: ' + before, ...(await chrome.developerPrivate.getExtensionsInfo()).map((i) => i.name + ': ' + i.state)];
   })()`);
   await send('Target.closeTarget', { targetId });
   return states;
@@ -279,6 +280,7 @@ async function main() {
       if (!tabCtxId) tabCtxId = await contentContext(sessionId, 5000);
       const res = await listOptionsWhenReady(sessionId, tabCtxId);
       if (!res?.ok) throw new Error(res?.lastError || 'listOptions returned ok=false');
+      console.log('menu:', JSON.stringify({ models: res.models, levels: res.levels }));
       pinnedModel = res.models?.find((m) => m.id);
       if (!pinnedModel) throw new Error('no model with non-empty id');
     });
